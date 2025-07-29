@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Correlation Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        .chart-container {
+            position: relative;
+            height: 45vh;
+            width: 100%;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 p-4 sm:p-6 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">Sales Correlation Dashboard</h1>
+            <p class="text-lg text-gray-600 mt-1">Units (Sell-In) vs. POS Sell-Out Analysis</p>
+        </header>
+
+        <!-- File Upload Section -->
+        <div class="bg-white p-6 rounded-xl shadow-md mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-800">1. Upload Data Files</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                <div>
+                    <label for="actualsFile" class="block text-sm font-medium text-gray-700 mb-2">Actuals Data (.csv)</label>
+                    <input type="file" id="actualsFile" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+                </div>
+                <div>
+                    <label for="posFile" class="block text-sm font-medium text-gray-700 mb-2">POS Sell-Out Data (.csv)</label>
+                    <input type="file" id="posFile" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"/>
+                </div>
+            </div>
+            <button id="loadDataBtn" class="w-full md:w-auto bg-blue-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-700 transition duration-300 disabled:bg-gray-400">Load and Process Data</button>
+            <p id="statusMessage" class="text-sm text-gray-600 mt-4"></p>
+        </div>
+
+
+        <!-- Filters -->
+        <div id="filtersSection" class="bg-white p-6 rounded-xl shadow-md mb-8" style="display: none;">
+            <div class="flex justify-between items-center mb-4">
+                 <h2 class="text-xl font-semibold text-gray-800">2. Filters</h2>
+                 <button id="clearFiltersBtn" class="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 transition duration-300 text-sm">Clear All Filters</button>
+            </div>
+            <div id="filtersContainer" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                 <!-- Filter dropdowns will be dynamically inserted here -->
+            </div>
+        </div>
+        
+        <!-- Analytics & Charts -->
+        <div id="dashboardContent" style="display: none;">
+            <!-- Correlation Score -->
+            <div class="bg-white p-6 rounded-xl shadow-md mb-8">
+                 <h2 class="text-xl font-semibold mb-2 text-gray-800">3. Analysis</h2>
+                 <div class="text-center p-4 bg-blue-50 rounded-lg">
+                    <p class="text-lg text-gray-600">Pearson Correlation Coefficient (r)</p>
+                    <p id="correlationValue" class="text-4xl font-bold text-blue-600 mt-2">N/A</p>
+                 </div>
+            </div>
+
+            <!-- Charts -->
+            <div id="chartsSection" class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div class="bg-white p-6 rounded-xl shadow-md">
+                    <h3 class="text-lg font-semibold mb-4 text-gray-800">Trend over Time</h3>
+                    <div class="chart-container">
+                        <canvas id="timeSeriesChart"></canvas>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-md">
+                    <h3 class="text-lg font-semibold mb-4 text-gray-800">Units vs. POS Sell-Out</h3>
+                     <div class="chart-container">
+                        <canvas id="scatterPlot"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- GLOBAL VARIABLES ---
+        let analysisData = [];
+        let timeSeriesChart, scatterPlot;
+        const timeSeriesCtx = document.getElementById('timeSeriesChart').getContext('2d');
+        const scatterCtx = document.getElementById('scatterPlot').getContext('2d');
+
+        const filterColumns = [
+            { id: 'marketCenterFilter', name: 'Market Center', key: 'Market_Center_codename' },
+            { id: 'productFamilyFilter', name: 'Product Sub-Family', key: 'Product_Sub_Family_codename' },
+            { id: 'customerFilter', name: 'Customer', key: 'Customer_codename' },
+            { id: 'brandFilter', name: 'Brand', key: 'BizOps_Brand_codename' },
+            { id: 'cpuCoreFilter', name: 'CPU Core', key: 'CPU_Core_codename' },
+            { id: 'profitCenterFilter', name: 'Profit Center', key: 'Profit_Center_codename' },
+        ];
+
+        // --- DOM ELEMENTS ---
+        const loadDataBtn = document.getElementById('loadDataBtn');
+        const actualsFileInput = document.getElementById('actualsFile');
+        const posFileInput = document.getElementById('posFile');
+        const statusMessage = document.getElementById('statusMessage');
+        const filtersSection = document.getElementById('filtersSection');
+        const filtersContainer = document.getElementById('filtersContainer');
+        const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+        const dashboardContent = document.getElementById('dashboardContent');
+        const correlationValueEl = document.getElementById('correlationValue');
+
+        // --- EVENT LISTENERS ---
+        loadDataBtn.addEventListener('click', handleDataLoad);
+        clearFiltersBtn.addEventListener('click', () => {
+            document.querySelectorAll('#filtersContainer select').forEach(sel => sel.value = 'All');
+            updateDashboard();
+        });
+
+        // --- DATA PROCESSING LOGIC ---
+        async function handleDataLoad() {
+            if (!actualsFileInput.files[0] || !posFileInput.files[0]) {
+                statusMessage.textContent = 'Please select both Actuals and POS Sell-Out CSV files.';
+                statusMessage.className = 'text-sm text-red-600 mt-4';
+                return;
+            }
+
+            statusMessage.textContent = 'Loading and processing data... This may take a moment.';
+            statusMessage.className = 'text-sm text-blue-600 mt-4';
+            loadDataBtn.disabled = true;
+
+            try {
+                const [actualsText, posText] = await Promise.all([
+                    actualsFileInput.files[0].text(),
+                    posFileInput.files[0].text()
+                ]);
+
+                const actualsData = parseCSV(actualsText);
+                const posData = parseCSV(posText);
+                
+                analysisData = processAndMergeData(actualsData, posData);
+                
+                initializeDashboard(analysisData);
+                statusMessage.textContent = `Successfully processed ${analysisData.length} aggregated records. You can now use the filters.`;
+                statusMessage.className = 'text-sm text-green-600 mt-4';
+
+            } catch (error) {
+                console.error("Error processing files:", error);
+                statusMessage.textContent = 'Error processing files. Please check the console for details.';
+                statusMessage.className = 'text-sm text-red-600 mt-4';
+            } finally {
+                loadDataBtn.disabled = false;
+            }
+        }
+
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const header = lines[0].split(',').map(h => h.trim());
+            const data = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',');
+                const entry = {};
+                for (let j = 0; j < header.length; j++) {
+                    entry[header[j]] = values[j] ? values[j].trim() : '';
+                }
+                data.push(entry);
+            }
+            return data;
+        }
+
+        function processAndMergeData(actuals, pos) {
+            const commonGrains = [
+                'Quarter', 'PART_NM_CODENAME', 'Customer_codename', 'Package_Leads_codename',
+                'Product_Sub_Family_codename', 'BizOps_Brand_codename', 'CPU_Core_codename',
+                'External_Device_codename', 'Profit_Center_codename', 'Market_Center_codename',
+                'Model_codename'
+            ];
+
+            pos.forEach(p => {
+                if ('customer_codename' in p) {
+                    p.Customer_codename = p.customer_codename;
+                    delete p.customer_codename;
+                }
+            });
+
+            const mergedMap = new Map();
+            const actualsMap = new Map();
+            actuals.forEach(row => {
+                const key = commonGrains.map(g => row[g] || '').join('|');
+                actualsMap.set(key, row);
+            });
+
+            pos.forEach(posRow => {
+                const key = commonGrains.map(g => posRow[g] || '').join('|');
+                if (actualsMap.has(key)) {
+                    const actualsRow = actualsMap.get(key);
+                    const units = parseFloat(actualsRow.Units) || 0;
+                    const posTotal = parseFloat(posRow.POS_SellOut_Total) || 0;
+
+                    if (mergedMap.has(key)) {
+                        const existing = mergedMap.get(key);
+                        existing.Units += units;
+                        existing.POS_SellOut_Total += posTotal;
+                    } else {
+                        const newEntry = { ...actualsRow, ...posRow };
+                        newEntry.Units = units;
+                        newEntry.POS_SellOut_Total = posTotal;
+                        mergedMap.set(key, newEntry);
+                    }
+                }
+            });
+            
+            return Array.from(mergedMap.values());
+        }
+
+        // --- DASHBOARD INITIALIZATION ---
+        function initializeDashboard(data) {
+            filtersContainer.innerHTML = ''; // Clear previous filters
+
+            filterColumns.forEach(filter => {
+                const values = getUniqueValues(data, filter.key);
+                const filterDiv = document.createElement('div');
+                
+                const label = document.createElement('label');
+                label.for = filter.id;
+                label.className = 'block text-sm font-medium text-gray-700 mb-1';
+                label.textContent = filter.name;
+
+                const select = document.createElement('select');
+                select.id = filter.id;
+                select.className = 'w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition';
+                select.innerHTML = `<option value="All">All ${filter.name}s</option>`;
+                
+                values.forEach(val => {
+                    const option = document.createElement('option');
+                    option.value = val;
+                    option.textContent = val;
+                    select.appendChild(option);
+                });
+                
+                select.addEventListener('change', updateDashboard);
+                filterDiv.appendChild(label);
+                filterDiv.appendChild(select);
+                filtersContainer.appendChild(filterDiv);
+            });
+            
+            filtersSection.style.display = 'block';
+            dashboardContent.style.display = 'block';
+            updateDashboard();
+        }
+
+        // --- UTILITY & CHARTING FUNCTIONS ---
+        function getUniqueValues(data, key) {
+            return [...new Set(data.map(item => item[key]).filter(Boolean))].sort();
+        }
+
+        function updateDashboard() {
+            const activeFilters = {};
+            filterColumns.forEach(f => {
+                const select = document.getElementById(f.id);
+                if (select) activeFilters[f.key] = select.value;
+            });
+
+            const filteredData = analysisData.filter(d => {
+                return Object.entries(activeFilters).every(([key, value]) => {
+                    return value === 'All' || d[key] === value;
+                });
+            });
+
+            updateCorrelation(filteredData);
+            updateTimeSeries(filteredData);
+            updateScatterPlot(filteredData);
+        }
+        
+        function calculateCorrelation(data) {
+            const n = data.length;
+            if (n < 2) return NaN;
+
+            let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+            for (const { Units: x, POS_SellOut_Total: y } of data) {
+                sumX += x;
+                sumY += y;
+                sumXY += x * y;
+                sumX2 += x * x;
+                sumY2 += y * y;
+            }
+
+            const numerator = n * sumXY - sumX * sumY;
+            const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+
+            if (denominator === 0) return NaN;
+            return numerator / denominator;
+        }
+
+        function updateCorrelation(data) {
+            const correlation = calculateCorrelation(data);
+            if (isNaN(correlation)) {
+                correlationValueEl.textContent = 'N/A';
+            } else {
+                correlationValueEl.textContent = correlation.toFixed(4);
+            }
+        }
+
+        function updateTimeSeries(data) {
+            const aggregatedByQuarter = data.reduce((acc, curr) => {
+                if (!acc[curr.Quarter]) {
+                    acc[curr.Quarter] = { Units: 0, POS_SellOut_Total: 0 };
+                }
+                acc[curr.Quarter].Units += curr.Units;
+                acc[curr.Quarter].POS_SellOut_Total += curr.POS_SellOut_Total;
+                return acc;
+            }, {});
+
+            const sortedQuarters = Object.keys(aggregatedByQuarter).sort();
+            const labels = sortedQuarters;
+            const unitsData = sortedQuarters.map(q => aggregatedByQuarter[q].Units);
+            const posData = sortedQuarters.map(q => aggregatedByQuarter[q].POS_SellOut_Total);
+
+            if (timeSeriesChart) timeSeriesChart.destroy();
+            timeSeriesChart = new Chart(timeSeriesCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Total Units (Sell-In)', data: unitsData, borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.5)', tension: 0.1 },
+                        { label: 'Total POS Sell-Out', data: posData, borderColor: 'rgb(239, 68, 68)', backgroundColor: 'rgba(239, 68, 68, 0.5)', tension: 0.1 }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { display: true, text: 'Total Count' } }, x: { title: { display: true, text: 'Quarter' } } }, plugins: { legend: { position: 'top' } } }
+            });
+        }
+
+        function updateScatterPlot(data) {
+            const scatterData = data.map(d => ({ x: d.Units, y: d.POS_SellOut_Total }));
+
+            if (scatterPlot) scatterPlot.destroy();
+            scatterPlot = new Chart(scatterCtx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{ label: 'Units vs. POS Sell-Out', data: scatterData, backgroundColor: 'rgba(34, 197, 94, 0.6)' }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Units (Sell-In)' } }, y: { title: { display: true, text: 'POS Sell-Out Total' } } } }
+            });
+        }
+    </script>
+</body>
+</html>
